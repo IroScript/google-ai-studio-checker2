@@ -1,0 +1,6 @@
+{
+  "name": "KidsTube",
+  "description": "KidsTube offline video player with folder selection, parental math locks, auto-recovery, and vibrant child-safe interface.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,487 @@
+package com.example.viewmodel
+
+import android.app.Application
+import android.content.Context
+import android.net.Uri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.model.VideoItem
+import com.example.repository.VideoRepository
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlin.random.Random
+
+data class KidsTubeUiState(
+    val videos: List<VideoItem> = emptyList(),
+    val currentVideo: VideoItem? = null,
+    val isPlaying: Boolean = false,
+    val currentPositionMs: Long = 0L,
+    val durationMs: Long = 0L,
+    val isBuffering: Boolean = false,
+    val errorMessage: String? = null,
+    val isLoading: Boolean = true,
+    val isParentMode: Boolean = false,
+    val showParentLockDialog: Boolean = false,
+    val parentMathQuestion: String = "",
+    val parentMathAnswer: Int = 0,
+    val isToddlerLockActive: Boolean = false,
+    val selectedFolder: String? = null,
+    val folders: List<String> = emptyList(),
+    val screenTimerMinutes: Int? = null,
+    val screenTimerRemainingSeconds: Long? = null,
+    val isScreenTimeUp: Boolean = false,
+    val isAutoPlayNext: Boolean = true,
+    val isShuffleMode: Boolean = true,
+    val retryAttempt: Int = 0,
+    val toastMessage: String? = null
+)
+
+class KidsTubeViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = VideoRepository(application)
+
+    private val _uiState = MutableStateFlow(KidsTubeUiState())
+    val uiState: StateFlow<KidsTubeUiState> = _uiState.asStateFlow()
+
+    private var screenTimerJob: Job? = null
+    private val maxRetries = 2
+
+    // History for previous button in shuffle mode
+    private val historyStack = ArrayDeque<String>()
+    // Set of played video IDs in current shuffle cycle to prevent repeats
+    private val playedVideoIds = mutableSetOf<String>()
+
+    init {
+        loadVideos()
+    }
+
+    fun loadVideos() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val list = repository.getSavedVideos()
+            val folders = list.map { it.folderName }.distinct()
+            val initialVideo = list.firstOrNull()
+
+            _uiState.update {
+                it.copy(
+                    videos = list,
+                    folders = folders,
+                    currentVideo = initialVideo,
+                    isLoading = false
+                )
+            }
+            initialVideo?.let { playedVideoIds.add(it.id) }
+        }
+    }
+
+    fun playVideo(video: VideoItem, isRetry: Boolean = false, recordHistory: Boolean = true) {
+        if (!isRetry) {
+            _uiState.update { it.copy(retryAttempt = 0, errorMessage = null) }
+        }
+        val current = _uiState.value.currentVideo
+        if (recordHistory && current != null && current.id != video.id) {
+            historyStack.addLast(current.id)
+            if (historyStack.size > 50) {
+                historyStack.removeFirst()
+            }
+        }
+        playedVideoIds.add(video.id)
+
+        _uiState.update {
+            it.copy(
+                currentVideo = video,
+                isPlaying = true,
+                currentPositionMs = 0L
+            )
+        }
+    }
+
+    fun onPlayerPlaybackStateChanged(isPlaying: Boolean, isBuffering: Boolean) {
+        _uiState.update {
+            it.copy(
+                isPlaying = isPlaying,
+                isBuffering = isBuffering
+            )
+        }
+    }
+
+    fun onProgressUpdate(currentPos: Long, totalDuration: Long) {
+        _uiState.update {
+            it.copy(
+                currentPositionMs = currentPos,
+                durationMs = if (totalDuration > 0) totalDuration else it.durationMs
+            )
+        }
+    }
+
+    fun onPlayerError(errorDescription: String) {
+        val current = _uiState.value.currentVideo ?: return
+        val currentRetry = _uiState.value.retryAttempt
+
+        if (currentRetry < maxRetries) {
+            _uiState.update { it.copy(retryAttempt = currentRetry + 1) }
+            viewModelScope.launch {
+                delay(1500)
+                playVideo(current, isRetry = true)
+            }
+        } else {
+            // Auto skip to next
+            _uiState.update {
+                it.copy(
+                    retryAttempt = 0,
+                    toastMessage = "Skipping unplayable video..."
+                )
+            }
+            playNextVideo()
+        }
+    }
+
+    fun onVideoFinished() {
+        if (_uiState.value.isAutoPlayNext) {
+            playNextVideo()
+        }
+    }
+
+    fun playNextVideo() {
+        val filtered = getFilteredVideos()
+        if (filtered.isEmpty()) return
+
+        val currentId = _uiState.value.currentVideo?.id
+
+        if (_uiState.value.isShuffleMode) {
+            // SHUFFLE MODE: Pick non-repeating random video from filtered playlist
+            val unplayedCandidates = filtered.filter { it.id !in playedVideoIds && it.id != currentId }
+            val nextVideo = when {
+                unplayedCandidates.isNotEmpty() -> unplayedCandidates.random()
+                filtered.size > 1 -> {
+                    // Reset played cycle, exclude only current video
+                    playedVideoIds.clear()
+                    currentId?.let { playedVideoIds.add(it) }
+                    filtered.filter { it.id != currentId }.random()
+                }
+                else -> filtered.first()
+            }
+            playVideo(nextVideo)
+        } else {
+            // SEQUENTIAL MODE
+            val currentIndex = filtered.indexOfFirst { it.id == currentId }
+            val nextIndex = if (currentIndex >= 0 && currentIndex + 1 < filtered.size) currentIndex + 1 else 0
+            playVideo(filtered[nextIndex])
+        }
+    }
+
+    fun playPreviousVideo() {
+        val filtered = getFilteredVideos()
+        if (filtered.isEmpty()) return
+
+        if (_uiState.value.isShuffleMode && historyStack.isNotEmpty()) {
+            val previousId = historyStack.removeLast()
+            val prevVideo = filtered.find { it.id == previousId } ?: filtered.first()
+            playVideo(prevVideo, recordHistory = false)
+        } else {
+            val currentIndex = filtered.indexOfFirst { it.id == _uiState.value.currentVideo?.id }
+            val prevIndex = if (currentIndex > 0) currentIndex - 1 else filtered.size - 1
+            playVideo(filtered[prevIndex], recordHistory = false)
+        }
+    }
+
+    fun toggleShuffle() {
+        _uiState.update {
+            val nextState = !it.isShuffleMode
+            it.copy(
+                isShuffleMode = nextState,
+                toastMessage = if (nextState) "Random Shuffle Mode ON 🔀" else "Sequential Mode 🔁"
+            )
+        }
+    }
+
+    fun togglePlayPause() {
+        if (_uiState.value.isScreenTimeUp) return
+        _uiState.update { it.copy(isPlaying = !it.isPlaying) }
+    }
+
+    fun requestParentMode() {
+        if (_uiState.value.isParentMode) {
+            _uiState.update { it.copy(isParentMode = false) }
+            return
+        }
+        val a = Random.nextInt(3, 9)
+        val b = Random.nextInt(3, 9)
+        _uiState.update {
+            it.copy(
+                showParentLockDialog = true,
+                parentMathQuestion = "$a × $b",
+                parentMathAnswer = a * b
+            )
+        }
+    }
+
+    fun dismissParentLockDialog() {
+        _uiState.update { it.copy(showParentLockDialog = false) }
+    }
+
+    fun verifyParentAnswer(userAnswer: Int): Boolean {
+        if (userAnswer == _uiState.value.parentMathAnswer) {
+            _uiState.update {
+                it.copy(
+                    isParentMode = true,
+                    showParentLockDialog = false,
+                    isToddlerLockActive = false,
+                    toastMessage = "Parent controls unlocked"
+                )
+            }
+            return true
+        }
+        return false
+    }
+
+    fun exitParentMode() {
+        _uiState.update { it.copy(isParentMode = false) }
+    }
+
+    fun toggleToddlerLock() {
+        _uiState.update {
+            val newLock = !it.isToddlerLockActive
+            it.copy(
+                isToddlerLockActive = newLock,
+                toastMessage = if (newLock) "Screen locked! Long-press lock to unlock" else "Screen unlocked"
+            )
+        }
+    }
+
+    fun unlockToddlerLock() {
+        _uiState.update {
+            it.copy(
+                isToddlerLockActive = false,
+                toastMessage = "Screen unlocked"
+            )
+        }
+    }
+
+    fun filterByFolder(folder: String?) {
+        _uiState.update { it.copy(selectedFolder = folder) }
+    }
+
+    fun importFolder(treeUri: Uri) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val newVideos = repository.scanDocumentTree(treeUri)
+            if (newVideos.isEmpty()) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        toastMessage = "No compatible videos found in folder"
+                    )
+                }
+                return@launch
+            }
+
+            val existing = _uiState.value.videos.toMutableList()
+            val existingUris = existing.map { it.uriString }.toSet()
+            val toAdd = newVideos.filterNot { it.uriString in existingUris }
+
+            existing.addAll(0, toAdd)
+            repository.saveVideos(existing)
+            val folders = existing.map { it.folderName }.distinct()
+
+            _uiState.update {
+                it.copy(
+                    videos = existing,
+                    folders = folders,
+                    isLoading = false,
+                    toastMessage = "${toAdd.size} videos added from folder!"
+                )
+            }
+            if (toAdd.isNotEmpty() && _uiState.value.currentVideo == null) {
+                playVideo(toAdd.first())
+            }
+        }
+    }
+
+    fun importUris(uris: List<Uri>, context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val newItems = uris.map { repository.createVideoFromUri(it, context) }
+            val existing = _uiState.value.videos.toMutableList()
+            val existingUris = existing.map { it.uriString }.toSet()
+            val toAdd = newItems.filterNot { it.uriString in existingUris }
+
+            existing.addAll(0, toAdd)
+            repository.saveVideos(existing)
+            val folders = existing.map { it.folderName }.distinct()
+
+            _uiState.update {
+                it.copy(
+                    videos = existing,
+                    folders = folders,
+                    isLoading = false,
+                    toastMessage = "${toAdd.size} video(s) added!"
+                )
+            }
+            if (toAdd.isNotEmpty() && _uiState.value.currentVideo == null) {
+                playVideo(toAdd.first())
+            }
+        }
+    }
+
+    fun scanDeviceVideos() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val scanned = repository.scanDeviceVideos()
+            if (scanned.isEmpty()) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        toastMessage = "No videos detected on device storage"
+                    )
+                }
+                return@launch
+            }
+
+            val existing = _uiState.value.videos.toMutableList()
+            val existingUris = existing.map { it.uriString }.toSet()
+            val toAdd = scanned.filterNot { it.uriString in existingUris }
+
+            existing.addAll(toAdd)
+            repository.saveVideos(existing)
+            val folders = existing.map { it.folderName }.distinct()
+
+            _uiState.update {
+                it.copy(
+                    videos = existing,
+                    folders = folders,
+                    isLoading = false,
+                    toastMessage = "Found ${scanned.size} videos on device!"
+                )
+            }
+        }
+    }
+
+    fun restoreSampleVideos() {
+        viewModelScope.launch {
+            val samples = VideoRepository.SAMPLE_VIDEOS
+            val existing = _uiState.value.videos.toMutableList()
+            val existingUris = existing.map { it.uriString }.toSet()
+            val toAdd = samples.filterNot { it.uriString in existingUris }
+
+            existing.addAll(toAdd)
+            repository.saveVideos(existing)
+            val folders = existing.map { it.folderName }.distinct()
+
+            _uiState.update {
+                it.copy(
+                    videos = existing,
+                    folders = folders,
+                    toastMessage = "Added ${toAdd.size} kid sample videos!"
+                )
+            }
+            if (_uiState.value.currentVideo == null && existing.isNotEmpty()) {
+                playVideo(existing.first())
+            }
+        }
+    }
+
+    fun removeVideo(videoId: String) {
+        viewModelScope.launch {
+            val updated = _uiState.value.videos.filterNot { it.id == videoId }
+            repository.saveVideos(updated)
+            val folders = updated.map { it.folderName }.distinct()
+
+            var newCurrent = _uiState.value.currentVideo
+            if (newCurrent?.id == videoId) {
+                newCurrent = updated.firstOrNull()
+            }
+
+            _uiState.update {
+                it.copy(
+                    videos = updated,
+                    folders = folders,
+                    currentVideo = newCurrent,
+                    toastMessage = "Video removed"
+                )
+            }
+        }
+    }
+
+    fun clearAllVideos() {
+        viewModelScope.launch {
+            repository.saveVideos(emptyList())
+            _uiState.update {
+                it.copy(
+                    videos = emptyList(),
+                    folders = emptyList(),
+                    currentVideo = null,
+                    isPlaying = false,
+                    toastMessage = "Video library cleared"
+                )
+            }
+        }
+    }
+
+    fun setScreenTimeLimit(minutes: Int?) {
+        screenTimerJob?.cancel()
+        if (minutes == null || minutes <= 0) {
+            _uiState.update {
+                it.copy(
+                    screenTimerMinutes = null,
+                    screenTimerRemainingSeconds = null,
+                    isScreenTimeUp = false,
+                    toastMessage = "Timer turned off"
+                )
+            }
+            return
+        }
+
+        val totalSeconds = minutes * 60L
+        _uiState.update {
+            it.copy(
+                screenTimerMinutes = minutes,
+                screenTimerRemainingSeconds = totalSeconds,
+                isScreenTimeUp = false,
+                toastMessage = "Timer set for $minutes minutes ⏱️"
+            )
+        }
+
+        screenTimerJob = viewModelScope.launch {
+            var remaining = totalSeconds
+            while (remaining > 0) {
+                delay(1000)
+                remaining--
+                _uiState.update { it.copy(screenTimerRemainingSeconds = remaining) }
+            }
+            // Timer expired!
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    isScreenTimeUp = true,
+                    toastMessage = "Screen time is up! Time for a break 🌟"
+                )
+            }
+        }
+    }
+
+    fun dismissScreenTimeUp() {
+        _uiState.update { it.copy(isScreenTimeUp = false) }
+    }
+
+    fun toggleAutoPlay() {
+        _uiState.update { it.copy(isAutoPlayNext = !it.isAutoPlayNext) }
+    }
+
+    fun clearToast() {
+        _uiState.update { it.copy(toastMessage = null) }
+    }
+
+    fun getFilteredVideos(): List<VideoItem> {
+        val selected = _uiState.value.selectedFolder
+        return if (selected == null) {
+            _uiState.value.videos
+        } else {
+            _uiState.value.videos.filter { it.folderName == selected }
+        }
+    }
+}
