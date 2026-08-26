@@ -57,13 +57,17 @@ jobs:
 
       - name: Build Debug APK
         if: "${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'debug' }}"
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.configuration-cache=false -Dkotlin.compiler.execution.strategy=daemon"
         run: |
-          gradle :app:assembleDebug --no-daemon --stacktrace
+          gradle :app:assembleDebug --no-configuration-cache --stacktrace
 
       - name: Build Release APK
         if: "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'release' }}"
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.configuration-cache=false -Dkotlin.compiler.execution.strategy=daemon"
         run: |
-          gradle :app:assembleRelease --no-daemon --stacktrace
+          gradle :app:assembleRelease --no-configuration-cache --stacktrace
 
       - name: Upload APK as Ready-made Downloadable Artifact
         uses: actions/upload-artifact@v4
