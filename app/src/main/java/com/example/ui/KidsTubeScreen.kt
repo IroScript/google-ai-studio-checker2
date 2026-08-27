@@ -129,9 +129,6 @@ fun KidsTubeScreen(
                 indication = null
             ) {
                 if (!uiState.isToddlerLockActive) {
-                    if (!uiState.isPlaying && uiState.currentVideo != null && !uiState.isScreenTimeUp) {
-                        viewModel.togglePlayPause()
-                    }
                     areOverlaysVisible = !areOverlaysVisible
                     if (areOverlaysVisible) {
                         startHideTimer()

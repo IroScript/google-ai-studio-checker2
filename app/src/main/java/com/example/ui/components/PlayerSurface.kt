@@ -64,13 +64,15 @@ fun PlayerSurface(
 
     DisposableEffect(Unit) {
         val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(playing: Boolean) {
-                onPlaybackStateChanged(playing, exoPlayer.playbackState == Player.STATE_BUFFERING)
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                val isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING
+                onPlaybackStateChanged(playWhenReady, isBuffering)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val isBuffering = playbackState == Player.STATE_BUFFERING
-                onPlaybackStateChanged(exoPlayer.isPlaying, isBuffering)
+                val isPlayActive = exoPlayer.playWhenReady && playbackState != Player.STATE_ENDED
+                onPlaybackStateChanged(isPlayActive, isBuffering)
 
                 if (playbackState == Player.STATE_ENDED) {
                     onVideoFinished()
