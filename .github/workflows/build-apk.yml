@@ -21,6 +21,7 @@ on:
         options:
           - debug
           - release
+          - both
 
 permissions:
   contents: write
@@ -33,6 +34,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -43,33 +46,68 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Accept Android SDK Licenses
+      - name: Accept Android SDK Licenses & Install Components
         run: |
+          mkdir -p "$ANDROID_HOME/licenses" || true
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license" || true
+          echo "84831b9409646a578e440d77082a601350e3d250" >> "$ANDROID_HOME/licenses/android-sdk-license" || true
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$ANDROID_HOME/licenses/android-sdk-license" || true
+          echo "859f317696f67ef3d7f30a50a5560e7834b43903" >> "$ANDROID_HOME/licenses/android-sdk-license" || true
           yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-      - name: Prepare Environment & Keystores
+      - name: Prepare Environment, Properties & Keystores
         run: |
-          touch .env
+          echo "=== Setting up .env file ==="
+          if [ -f ".env.example" ]; then
+            cp .env.example .env
+          else
+            touch .env
+          fi
+
+          echo "=== Setting up local.properties ==="
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
-            echo "Decoding debug keystore..."
+
+          echo "=== Setting up Debug Keystore ==="
+          if [ -f "debug.keystore.base64" ]; then
+            echo "Decoding base64 debug keystore..."
             base64 -d debug.keystore.base64 > debug.keystore
+          fi
+          if [ ! -f "debug.keystore" ]; then
+            echo "Generating debug keystore via keytool..."
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          echo "=== Setting up Release Keystore ==="
+          if [ ! -f "my-upload-key.jks" ]; then
+            echo "Generating release keystore via keytool for CI..."
+            keytool -genkey -v -keystore my-upload-key.jks -storepass android -alias upload -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Release,O=Android,C=US"
           fi
 
       - name: Build Debug APK
-        if: "${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'debug' }}"
+        if: "${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' }}"
         run: |
-          gradle :app:assembleDebug --stacktrace
+          gradle :app:assembleDebug --stacktrace --no-daemon -x test -x lint
 
       - name: Build Release APK
-        if: "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'release' }}"
+        if: "${{ (github.event_name == 'workflow_dispatch' && (github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both')) || startsWith(github.ref, 'refs/tags/') }}"
+        env:
+          KEYSTORE_PATH: my-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'upload' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
         run: |
-          gradle :app:assembleRelease --stacktrace
+          gradle :app:assembleRelease --stacktrace --no-daemon -x test -x lint
+
+      - name: Verify & List Output APKs
+        run: |
+          echo "=== Listing all generated APKs ==="
+          find app/build/outputs/apk -type f -name "*.apk" -exec ls -lh {} + || true
 
       - name: Upload APK as Ready-made Downloadable Artifact
         uses: actions/upload-artifact@v4
@@ -77,6 +115,7 @@ jobs:
           name: KidsTube-APK
           path: app/build/outputs/apk/**/*.apk
           retention-days: 30
+          if-no-files-found: error
 
       - name: Create GitHub Release with APK (When Tagged)
         if: startsWith(github.ref, 'refs/tags/')
