@@ -38,7 +38,10 @@ data class KidsTubeUiState(
     val isAutoPlayNext: Boolean = true,
     val isShuffleMode: Boolean = true,
     val retryAttempt: Int = 0,
-    val toastMessage: String? = null
+    val toastMessage: String? = null,
+    val playTrigger: Long = 0L,
+    val seekRequestMs: Long? = null,
+    val displayPlaylist: List<VideoItem> = emptyList()
 )
 
 class KidsTubeViewModel(application: Application) : AndroidViewModel(application) {
@@ -66,11 +69,16 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
             val folders = list.map { it.folderName }.distinct()
             val initialVideo = list.firstOrNull()
 
+            val initialPlaylist = if (list.isNotEmpty()) {
+                if (_uiState.value.isShuffleMode) list.shuffled() else list
+            } else emptyList()
+
             _uiState.update {
                 it.copy(
                     videos = list,
                     folders = folders,
                     currentVideo = initialVideo,
+                    displayPlaylist = initialPlaylist,
                     isLoading = false
                 )
             }
@@ -91,11 +99,27 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
         }
         playedVideoIds.add(video.id)
 
+        // Dynamic shuffle sequence: Put chosen video first, and freshly randomize the rest
+        val filtered = getFilteredVideos(selectedFolder = _uiState.value.selectedFolder)
+        val newDisplayList = if (_uiState.value.isShuffleMode) {
+            val remaining = filtered.filter { it.id != video.id }.shuffled()
+            listOf(video) + remaining
+        } else {
+            val idx = filtered.indexOfFirst { it.id == video.id }
+            if (idx >= 0) {
+                filtered.subList(idx, filtered.size) + filtered.subList(0, idx)
+            } else {
+                filtered
+            }
+        }
+
         _uiState.update {
             it.copy(
                 currentVideo = video,
                 isPlaying = true,
-                currentPositionMs = 0L
+                currentPositionMs = 0L,
+                playTrigger = System.currentTimeMillis(),
+                displayPlaylist = newDisplayList
             )
         }
     }
@@ -116,6 +140,19 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
                 durationMs = if (totalDuration > 0) totalDuration else it.durationMs
             )
         }
+    }
+
+    fun seekTo(positionMs: Long) {
+        _uiState.update {
+            it.copy(
+                currentPositionMs = positionMs,
+                seekRequestMs = positionMs
+            )
+        }
+    }
+
+    fun onSeekHandled() {
+        _uiState.update { it.copy(seekRequestMs = null) }
     }
 
     fun onPlayerError(errorDescription: String) {
@@ -192,8 +229,18 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
     fun toggleShuffle() {
         _uiState.update {
             val nextState = !it.isShuffleMode
+            val filtered = getFilteredVideos(it.selectedFolder)
+            val current = it.currentVideo
+            val newPlaylist = if (nextState) {
+                if (current != null) {
+                    listOf(current) + filtered.filter { v -> v.id != current.id }.shuffled()
+                } else filtered.shuffled()
+            } else {
+                filtered
+            }
             it.copy(
                 isShuffleMode = nextState,
+                displayPlaylist = newPlaylist,
                 toastMessage = if (nextState) "Random Shuffle Mode ON 🔀" else "Sequential Mode 🔁"
             )
         }
@@ -263,7 +310,24 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun filterByFolder(folder: String?) {
-        _uiState.update { it.copy(selectedFolder = folder) }
+        val filtered = getFilteredVideos(selectedFolder = folder)
+        val current = _uiState.value.currentVideo
+        val isCurrentInFiltered = current != null && filtered.any { it.id == current.id }
+
+        val newPlaylist = if (filtered.isNotEmpty()) {
+            if (_uiState.value.isShuffleMode) filtered.shuffled() else filtered
+        } else emptyList()
+
+        _uiState.update {
+            it.copy(
+                selectedFolder = folder,
+                displayPlaylist = newPlaylist
+            )
+        }
+
+        if (filtered.isNotEmpty() && !isCurrentInFiltered) {
+            playVideo(filtered.first())
+        }
     }
 
     fun importFolder(treeUri: Uri) {
@@ -476,12 +540,11 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(toastMessage = null) }
     }
 
-    fun getFilteredVideos(): List<VideoItem> {
-        val selected = _uiState.value.selectedFolder
-        return if (selected == null) {
-            _uiState.value.videos
-        } else {
-            _uiState.value.videos.filter { it.folderName == selected }
+    fun getFilteredVideos(selectedFolder: String? = _uiState.value.selectedFolder): List<VideoItem> {
+        val all = _uiState.value.videos
+        if (selectedFolder == null) return all
+        return all.filter {
+            it.folderName == selectedFolder || it.folderName.startsWith("$selectedFolder /")
         }
     }
 }

@@ -118,7 +118,7 @@ fun VideoShelf(
                 )
 
                 folders.forEach { folder ->
-                    val count = videos.count { it.folderName == folder }
+                    val count = videos.count { it.folderName == folder || it.folderName.startsWith("$folder /") }
                     FilterChip(
                         selected = selectedFolder == folder,
                         onClick = { onSelectFolder(folder) },

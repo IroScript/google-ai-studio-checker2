@@ -30,6 +30,9 @@ import kotlinx.coroutines.delay
 fun PlayerSurface(
     video: VideoItem?,
     isPlaying: Boolean,
+    playTrigger: Long = 0L,
+    seekRequestMs: Long? = null,
+    onSeekHandled: () -> Unit = {},
     onPlaybackStateChanged: (isPlaying: Boolean, isBuffering: Boolean) -> Unit,
     onProgressUpdate: (currentPos: Long, totalDuration: Long) -> Unit,
     onVideoFinished: () -> Unit,
@@ -87,14 +90,15 @@ fun PlayerSurface(
         }
     }
 
-    // Handle video source changes
-    LaunchedEffect(video?.uriString) {
+    // Handle video source changes and instant touch play
+    LaunchedEffect(video?.uriString, playTrigger) {
         if (video != null) {
             try {
                 val mediaItem = MediaItem.fromUri(Uri.parse(video.uriString))
                 exoPlayer.setMediaItem(mediaItem)
                 exoPlayer.prepare()
-                exoPlayer.playWhenReady = isPlaying
+                exoPlayer.playWhenReady = true
+                exoPlayer.play()
             } catch (e: Exception) {
                 onError(e.message ?: "Failed to load media")
             }
@@ -106,8 +110,19 @@ fun PlayerSurface(
 
     // Handle isPlaying state changes
     LaunchedEffect(isPlaying) {
-        if (exoPlayer.playWhenReady != isPlaying) {
-            exoPlayer.playWhenReady = isPlaying
+        if (isPlaying) {
+            exoPlayer.playWhenReady = true
+            exoPlayer.play()
+        } else {
+            exoPlayer.pause()
+        }
+    }
+
+    // Handle seeking
+    LaunchedEffect(seekRequestMs) {
+        if (seekRequestMs != null) {
+            exoPlayer.seekTo(seekRequestMs)
+            onSeekHandled()
         }
     }
 

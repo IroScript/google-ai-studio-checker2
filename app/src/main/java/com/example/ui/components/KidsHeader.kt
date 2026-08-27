@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
@@ -175,23 +176,49 @@ fun KidsHeader(
                 }
             }
 
-            // Parental Controls Lock Button
+            // Parental Controls & Folder Selection Button (Folder icon with attached Lock badge)
             Surface(
                 shape = CircleShape,
-                color = if (isParentMode) KidsGreen else Color(0x44FFFFFF),
+                color = if (isParentMode) KidsGreen else Color(0x33FFFFFF),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.5.dp,
+                    if (isParentMode) KidsGreen else KidsAmber
+                ),
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(46.dp)
                     .clip(CircleShape)
                     .clickable { onParentModeClick() }
                     .testTag("parent_mode_button")
             ) {
-                Box(contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier.padding(4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Base Folder Icon
                     Icon(
-                        imageVector = if (isParentMode) Icons.Filled.Settings else Icons.Filled.Lock,
-                        contentDescription = "Parental Controls",
-                        tint = if (isParentMode) Color.Black else Color.White,
-                        modifier = Modifier.size(22.dp)
+                        imageVector = Icons.Filled.Folder,
+                        contentDescription = "Select Folders & Parental Controls",
+                        tint = if (isParentMode) Color.Black else KidsAmber,
+                        modifier = Modifier.size(24.dp)
                     )
+
+                    // Small Lock Badge attached at top-right
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isParentMode) KidsYellow else KidsRed,
+                        modifier = Modifier
+                            .size(14.dp)
+                            .align(Alignment.TopEnd)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isParentMode) Icons.Filled.LockOpen else Icons.Filled.Lock,
+                                contentDescription = null,
+                                tint = if (isParentMode) Color.Black else Color.White,
+                                modifier = Modifier.size(8.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

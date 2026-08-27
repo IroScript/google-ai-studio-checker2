@@ -140,57 +140,71 @@ class VideoRepository(private val context: Context) {
     }
 
     /**
-     * Scan files from DocumentTree URI (Storage Access Framework)
+     * Scan files from DocumentTree URI (Storage Access Framework) recursively across all subfolders
      */
     suspend fun scanDocumentTree(treeUri: Uri): List<VideoItem> = withContext(Dispatchers.IO) {
         val results = mutableListOf<VideoItem>()
         val contentResolver: ContentResolver = context.contentResolver
 
         try {
-            val docId = DocumentsContract.getTreeDocumentId(treeUri)
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
-            val folderName = getDocumentDisplayName(contentResolver, treeUri) ?: "Folder ${treeUri.lastPathSegment}"
+            val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
+            val rootFolderName = getDocumentDisplayName(contentResolver, treeUri) ?: "Root Folder"
 
-            val cursor: Cursor? = contentResolver.query(
-                childrenUri,
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE
-                ),
-                null,
-                null,
-                null
-            )
+            fun scanDirectory(docId: String, currentFolderPath: String) {
+                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+                val cursor: Cursor? = contentResolver.query(
+                    childrenUri,
+                    arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                    ),
+                    null,
+                    null,
+                    null
+                )
 
-            cursor?.use {
-                val idIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                val mimeIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                cursor?.use {
+                    val idIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    val mimeIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
 
-                while (it.moveToNext()) {
-                    val childId = it.getString(idIndex)
-                    val displayName = it.getString(nameIndex)
-                    val mimeType = it.getString(mimeIndex)
+                    while (it.moveToNext()) {
+                        val childId = it.getString(idIndex)
+                        val displayName = it.getString(nameIndex) ?: continue
+                        val mimeType = it.getString(mimeIndex)
 
-                    val isVideo = mimeType?.startsWith("video/") == true ||
-                            isVideoExtension(displayName)
+                        val isDir = mimeType == DocumentsContract.Document.MIME_TYPE_DIR ||
+                                mimeType == "vnd.android.document/directory"
 
-                    if (isVideo) {
-                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)
-                        results.add(
-                            VideoItem(
-                                id = UUID.randomUUID().toString(),
-                                title = cleanTitle(displayName),
-                                uriString = fileUri.toString(),
-                                folderName = folderName,
-                                youtubeId = YoutubeIdHelper.extractYoutubeId(displayName),
-                                isSample = false
-                            )
-                        )
+                        if (isDir) {
+                            // Recursively scan subfolder and sub-subfolder
+                            val nextPath = if (currentFolderPath.isEmpty()) displayName else "$currentFolderPath / $displayName"
+                            scanDirectory(childId, nextPath)
+                        } else {
+                            val isVideo = mimeType?.startsWith("video/") == true ||
+                                    isVideoExtension(displayName)
+
+                            if (isVideo) {
+                                val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)
+                                val folderDisplay = if (currentFolderPath.isEmpty()) rootFolderName else currentFolderPath
+                                results.add(
+                                    VideoItem(
+                                        id = UUID.randomUUID().toString(),
+                                        title = cleanTitle(displayName),
+                                        uriString = fileUri.toString(),
+                                        folderName = folderDisplay,
+                                        youtubeId = YoutubeIdHelper.extractYoutubeId(displayName),
+                                        isSample = false
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
+
+            scanDirectory(rootDocId, "")
         } catch (e: Exception) {
             e.printStackTrace()
         }
