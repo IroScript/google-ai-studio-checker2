@@ -68,4 +68,18 @@ class KidsTubeLogicTest {
         assertEquals(expected, correctInput.toIntOrNull())
         assertNotEquals(expected, wrongInput.toIntOrNull())
     }
+
+    @Test
+    fun testThumbnailKeyHashing() {
+        val uri1 = "content://media/external/video/media/101"
+        val uri2 = "content://media/external/video/media/102"
+        val digest = java.security.MessageDigest.getInstance("MD5")
+        
+        val hash1 = digest.digest(uri1.toByteArray()).joinToString("") { "%02x".format(it) }
+        val hash2 = java.security.MessageDigest.getInstance("MD5").digest(uri2.toByteArray()).joinToString("") { "%02x".format(it) }
+
+        assertNotEquals(hash1, hash2)
+        assertEquals(32, hash1.length)
+        assertEquals(32, hash2.length)
+    }
 }

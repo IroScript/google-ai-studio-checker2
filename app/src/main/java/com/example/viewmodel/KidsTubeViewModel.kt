@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.model.VideoItem
 import com.example.repository.VideoRepository
+import com.example.util.ThumbnailHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,6 +85,9 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
                 )
             }
             initialVideo?.let { playedVideoIds.add(it.id) }
+            viewModelScope.launch(Dispatchers.IO) {
+                ThumbnailHelper.preloadThumbnails(getApplication(), list)
+            }
         }
     }
 
@@ -360,6 +365,9 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
                     toastMessage = "${toAdd.size} videos added from folder!"
                 )
             }
+            viewModelScope.launch(Dispatchers.IO) {
+                ThumbnailHelper.preloadThumbnails(getApplication(), existing)
+            }
             if (toAdd.isNotEmpty() && _uiState.value.currentVideo == null) {
                 playVideo(toAdd.first())
             }
@@ -385,6 +393,9 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
                     isLoading = false,
                     toastMessage = "${toAdd.size} video(s) added!"
                 )
+            }
+            viewModelScope.launch(Dispatchers.IO) {
+                ThumbnailHelper.preloadThumbnails(getApplication(), existing)
             }
             if (toAdd.isNotEmpty() && _uiState.value.currentVideo == null) {
                 playVideo(toAdd.first())
@@ -422,6 +433,9 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
                     toastMessage = "Found ${scanned.size} videos on device!"
                 )
             }
+            viewModelScope.launch(Dispatchers.IO) {
+                ThumbnailHelper.preloadThumbnails(getApplication(), existing)
+            }
         }
     }
 
@@ -442,6 +456,9 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
                     folders = folders,
                     toastMessage = "Added ${toAdd.size} kid sample videos!"
                 )
+            }
+            viewModelScope.launch(Dispatchers.IO) {
+                ThumbnailHelper.preloadThumbnails(getApplication(), existing)
             }
             if (_uiState.value.currentVideo == null && existing.isNotEmpty()) {
                 playVideo(existing.first())

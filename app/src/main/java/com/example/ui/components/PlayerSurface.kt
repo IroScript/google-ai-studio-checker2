@@ -36,10 +36,12 @@ fun PlayerSurface(
     val libVLC = remember {
         val options = arrayListOf(
             "--no-drop-late-frames",
-            "--file-caching=2000",
-            "--network-caching=2000",
-            "--live-caching=2000",
-            "--sout-mux-caching=2000",
+            "--file-caching=150",
+            "--network-caching=500",
+            "--live-caching=100",
+            "--sout-mux-caching=100",
+            "--low-delay",
+            "--clock-jitter=0",
             "--no-video-title-show",
             "--audio-time-stretch",
             "--avcodec-hw=any"
@@ -109,9 +111,11 @@ fun PlayerSurface(
                 val uri = Uri.parse(video.uriString)
                 val media = Media(libVLC, uri).apply {
                     setHWDecoderEnabled(true, false)
-                    addOption(":file-caching=2000")
-                    addOption(":network-caching=2000")
-                    addOption(":live-caching=2000")
+                    addOption(":file-caching=150")
+                    addOption(":network-caching=500")
+                    addOption(":clock-jitter=0")
+                    addOption(":drop-late-frames")
+                    addOption(":skip-frames")
                 }
                 mediaPlayer.media = media
                 media.release()

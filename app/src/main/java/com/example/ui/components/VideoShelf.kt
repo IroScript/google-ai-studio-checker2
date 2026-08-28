@@ -189,10 +189,12 @@ fun VideoCardItem(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    var localThumbnail by remember(video.uriString) { mutableStateOf<Bitmap?>(null) }
+    var localThumbnail by remember(video.uriString) {
+        mutableStateOf(ThumbnailHelper.getMemoryCachedThumbnail(video.uriString))
+    }
 
     LaunchedEffect(video.uriString) {
-        if (video.youtubeId == null) {
+        if (video.youtubeId == null && localThumbnail == null) {
             localThumbnail = ThumbnailHelper.getVideoThumbnail(context, video.uriString)
         }
     }
