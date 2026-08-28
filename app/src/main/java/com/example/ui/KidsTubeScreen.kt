@@ -46,6 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,6 +92,13 @@ fun KidsTubeScreen(
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val coroutineScope = rememberCoroutineScope()
+
+    // Stabilize playlist & currentVideo so progress-update recompositions (every 500ms)
+    // do NOT cause VideoShelf to re-render/re-layout items
+    val stablePlaylist by remember { derivedStateOf { uiState.displayPlaylist } }
+    val stableCurrentVideo by remember { derivedStateOf { uiState.currentVideo } }
+    val stableFolders by remember { derivedStateOf { uiState.folders } }
+    val stableSelectedFolder by remember { derivedStateOf { uiState.selectedFolder } }
 
     var areOverlaysVisible by remember { mutableStateOf(true) }
     var hideJob by remember { mutableStateOf<Job?>(null) }
@@ -367,10 +375,10 @@ fun KidsTubeScreen(
 
                 // Horizontal Video Carousel Shelf (Directly underneath Seekbar)
                 VideoShelf(
-                    videos = if (uiState.displayPlaylist.isNotEmpty()) uiState.displayPlaylist else viewModel.getFilteredVideos(),
-                    currentVideo = uiState.currentVideo,
-                    folders = uiState.folders,
-                    selectedFolder = uiState.selectedFolder,
+                    videos = stablePlaylist,
+                    currentVideo = stableCurrentVideo,
+                    folders = stableFolders,
+                    selectedFolder = stableSelectedFolder,
                     onSelectFolder = {
                         viewModel.filterByFolder(it)
                         startHideTimer()

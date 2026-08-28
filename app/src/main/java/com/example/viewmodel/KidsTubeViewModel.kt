@@ -91,7 +91,7 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun playVideo(video: VideoItem, isRetry: Boolean = false, recordHistory: Boolean = true) {
+    fun playVideo(video: VideoItem, isRetry: Boolean = false, recordHistory: Boolean = true, reshufflePlaylist: Boolean = true) {
         if (!isRetry) {
             _uiState.update { it.copy(retryAttempt = 0, errorMessage = null) }
         }
@@ -104,18 +104,23 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
         }
         playedVideoIds.add(video.id)
 
-        // Dynamic shuffle sequence: Put chosen video first, and freshly randomize the rest
-        val filtered = getFilteredVideos(selectedFolder = _uiState.value.selectedFolder)
-        val newDisplayList = if (_uiState.value.isShuffleMode) {
-            val remaining = filtered.filter { it.id != video.id }.shuffled()
-            listOf(video) + remaining
-        } else {
-            val idx = filtered.indexOfFirst { it.id == video.id }
-            if (idx >= 0) {
-                filtered.subList(idx, filtered.size) + filtered.subList(0, idx)
+        // Only reshuffle the display playlist when user manually selects a video (not during autoplay)
+        val newDisplayList = if (reshufflePlaylist) {
+            val filtered = getFilteredVideos(selectedFolder = _uiState.value.selectedFolder)
+            if (_uiState.value.isShuffleMode) {
+                val remaining = filtered.filter { it.id != video.id }.shuffled()
+                listOf(video) + remaining
             } else {
-                filtered
+                val idx = filtered.indexOfFirst { it.id == video.id }
+                if (idx >= 0) {
+                    filtered.subList(idx, filtered.size) + filtered.subList(0, idx)
+                } else {
+                    filtered
+                }
             }
+        } else {
+            // Keep existing playlist order stable, don't reshuffle
+            _uiState.value.displayPlaylist
         }
 
         _uiState.update {
@@ -168,15 +173,12 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
             _uiState.update { it.copy(retryAttempt = currentRetry + 1) }
             viewModelScope.launch {
                 delay(1500)
-                playVideo(current, isRetry = true)
+                playVideo(current, isRetry = true, reshufflePlaylist = false)
             }
         } else {
-            // Auto skip to next
+            // Auto skip silently to next (no toast for non-playable files)
             _uiState.update {
-                it.copy(
-                    retryAttempt = 0,
-                    toastMessage = "Skipping unplayable video..."
-                )
+                it.copy(retryAttempt = 0)
             }
             playNextVideo()
         }
@@ -207,12 +209,12 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
                 }
                 else -> filtered.first()
             }
-            playVideo(nextVideo)
+            playVideo(nextVideo, reshufflePlaylist = false)
         } else {
             // SEQUENTIAL MODE
             val currentIndex = filtered.indexOfFirst { it.id == currentId }
             val nextIndex = if (currentIndex >= 0 && currentIndex + 1 < filtered.size) currentIndex + 1 else 0
-            playVideo(filtered[nextIndex])
+            playVideo(filtered[nextIndex], reshufflePlaylist = false)
         }
     }
 
@@ -223,11 +225,11 @@ class KidsTubeViewModel(application: Application) : AndroidViewModel(application
         if (_uiState.value.isShuffleMode && historyStack.isNotEmpty()) {
             val previousId = historyStack.removeLast()
             val prevVideo = filtered.find { it.id == previousId } ?: filtered.first()
-            playVideo(prevVideo, recordHistory = false)
+            playVideo(prevVideo, recordHistory = false, reshufflePlaylist = false)
         } else {
             val currentIndex = filtered.indexOfFirst { it.id == _uiState.value.currentVideo?.id }
             val prevIndex = if (currentIndex > 0) currentIndex - 1 else filtered.size - 1
-            playVideo(filtered[prevIndex], recordHistory = false)
+            playVideo(filtered[prevIndex], recordHistory = false, reshufflePlaylist = false)
         }
     }
 
