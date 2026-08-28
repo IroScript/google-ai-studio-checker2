@@ -3,6 +3,7 @@ package com.example.ui.components
 import android.net.Uri
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -11,13 +12,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import com.example.model.VideoItem
 import kotlinx.coroutines.delay
-import org.videolan.libvlc.LibVLC
-import org.videolan.libvlc.Media
-import org.videolan.libvlc.MediaPlayer
-import org.videolan.libvlc.util.VLCVideoLayout
 
+@OptIn(UnstableApi::class)
 @Composable
 fun PlayerSurface(
     video: VideoItem?,
@@ -33,74 +43,72 @@ fun PlayerSurface(
 ) {
     val context = LocalContext.current
 
-    val libVLC = remember {
-        val options = arrayListOf(
-            "--no-drop-late-frames",
-            "--file-caching=150",
-            "--network-caching=500",
-            "--live-caching=100",
-            "--sout-mux-caching=100",
-            "--low-delay",
-            "--clock-jitter=0",
-            "--no-video-title-show",
-            "--audio-time-stretch",
-            "--avcodec-hw=any"
-        )
-        LibVLC(context, options)
+    val exoPlayer = remember {
+        val userAgent = androidx.media3.common.util.Util.getUserAgent(context, "KidsTube")
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent(userAgent)
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(8000)
+            .setReadTimeoutMs(8000)
+
+        val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+
+        // Ultra-low latency LoadControl for instant 0ms playback like MX Player
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs */ 500,
+                /* maxBufferMs */ 2000,
+                /* bufferForPlaybackMs */ 100, // Starts immediately after 100ms buffer
+                /* bufferForPlaybackAfterRebufferMs */ 250
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        // Hardware-accelerated rendering with fallback
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+
+        ExoPlayer.Builder(context)
+            .setLoadControl(loadControl)
+            .setRenderersFactory(renderersFactory)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setSeekForwardIncrementMs(10000)
+            .setSeekBackIncrementMs(10000)
+            .build().apply {
+                repeatMode = Player.REPEAT_MODE_OFF
+                playWhenReady = true
+            }
     }
 
-    val mediaPlayer = remember {
-        MediaPlayer(libVLC)
-    }
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                val isBuffering = exoPlayer.playbackState == Player.STATE_BUFFERING
+                onPlaybackStateChanged(playWhenReady, isBuffering)
+            }
 
-    DisposableEffect(mediaPlayer) {
-        val listener = MediaPlayer.EventListener { event ->
-            when (event.type) {
-                MediaPlayer.Event.Playing -> {
-                    onPlaybackStateChanged(true, false)
-                }
-                MediaPlayer.Event.Paused -> {
-                    onPlaybackStateChanged(false, false)
-                }
-                MediaPlayer.Event.Stopped -> {
-                    onPlaybackStateChanged(false, false)
-                }
-                MediaPlayer.Event.EndReached -> {
-                    onPlaybackStateChanged(false, false)
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                val isBuffering = playbackState == Player.STATE_BUFFERING
+                val isPlayActive = exoPlayer.playWhenReady && playbackState != Player.STATE_ENDED
+                onPlaybackStateChanged(isPlayActive, isBuffering)
+
+                if (playbackState == Player.STATE_ENDED) {
                     onVideoFinished()
                 }
-                MediaPlayer.Event.Buffering -> {
-                    val isBuffering = event.buffering < 100f
-                    onPlaybackStateChanged(mediaPlayer.isPlaying, isBuffering)
-                }
-                MediaPlayer.Event.TimeChanged -> {
-                    val current = event.timeChanged
-                    val total = mediaPlayer.length
-                    if (total > 0) {
-                        onProgressUpdate(current, total)
-                    }
-                }
-                MediaPlayer.Event.LengthChanged -> {
-                    val total = event.lengthChanged
-                    val current = mediaPlayer.time
-                    if (total > 0) {
-                        onProgressUpdate(current, total)
-                    }
-                }
-                MediaPlayer.Event.EncounteredError -> {
-                    onError("Playback error occurred in VLC engine")
-                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                onError(error.message ?: "Playback error")
             }
         }
 
-        mediaPlayer.setEventListener(listener)
+        exoPlayer.addListener(listener)
 
         onDispose {
-            mediaPlayer.setEventListener(null)
-            mediaPlayer.stop()
-            mediaPlayer.detachViews()
-            mediaPlayer.release()
-            libVLC.release()
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
         }
     }
 
@@ -108,53 +116,44 @@ fun PlayerSurface(
     LaunchedEffect(video?.uriString, playTrigger) {
         if (video != null) {
             try {
-                val uri = Uri.parse(video.uriString)
-                val media = Media(libVLC, uri).apply {
-                    setHWDecoderEnabled(true, false)
-                    addOption(":file-caching=150")
-                    addOption(":network-caching=500")
-                    addOption(":clock-jitter=0")
-                    addOption(":drop-late-frames")
-                    addOption(":skip-frames")
-                }
-                mediaPlayer.media = media
-                media.release()
-                mediaPlayer.play()
+                val mediaItem = MediaItem.fromUri(Uri.parse(video.uriString))
+                exoPlayer.setMediaItem(mediaItem)
+                exoPlayer.prepare()
+                exoPlayer.playWhenReady = true
+                exoPlayer.play()
             } catch (e: Exception) {
-                onError(e.message ?: "Failed to load media in VLC")
+                onError(e.message ?: "Failed to load media")
             }
         } else {
-            mediaPlayer.stop()
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
         }
     }
 
     // Handle isPlaying state changes
     LaunchedEffect(isPlaying) {
         if (isPlaying) {
-            if (!mediaPlayer.isPlaying) {
-                mediaPlayer.play()
-            }
+            exoPlayer.playWhenReady = true
+            exoPlayer.play()
         } else {
-            if (mediaPlayer.isPlaying) {
-                mediaPlayer.pause()
-            }
+            exoPlayer.pause()
         }
     }
 
     // Handle seeking
     LaunchedEffect(seekRequestMs) {
         if (seekRequestMs != null) {
-            mediaPlayer.time = seekRequestMs
+            exoPlayer.seekTo(seekRequestMs)
             onSeekHandled()
         }
     }
 
-    // Periodic progress updates fallback
+    // Periodic progress updates
     LaunchedEffect(video, isPlaying) {
         while (true) {
-            if (mediaPlayer.isPlaying || mediaPlayer.time > 0) {
-                val current = mediaPlayer.time.coerceAtLeast(0L)
-                val duration = mediaPlayer.length.coerceAtLeast(0L)
+            if (exoPlayer.playbackState == Player.STATE_READY || exoPlayer.isPlaying) {
+                val current = exoPlayer.currentPosition.coerceAtLeast(0L)
+                val duration = exoPlayer.duration.coerceAtLeast(0L)
                 if (duration > 0) {
                     onProgressUpdate(current, duration)
                 }
@@ -165,13 +164,14 @@ fun PlayerSurface(
 
     AndroidView(
         factory = { ctx ->
-            VLCVideoLayout(ctx).apply {
+            PlayerView(ctx).apply {
+                player = exoPlayer
+                useController = false
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
-                mediaPlayer.attachViews(this, null, false, false)
-                mediaPlayer.videoScale = MediaPlayer.ScaleType.SURFACE_BEST_FIT
             }
         },
         modifier = modifier.fillMaxSize()
