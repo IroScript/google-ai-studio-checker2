@@ -21,6 +21,9 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    ndk {
+      abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+    }
   }
 
   signingConfigs {
@@ -61,6 +64,11 @@ android {
     includeInApk = false
     includeInBundle = true
   }
+  packaging {
+    jniLibs {
+      pickFirsts.addAll(listOf("**/*.so"))
+    }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
@@ -99,6 +107,7 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
+  implementation(libs.libvlc.all)
   implementation(libs.media3.exoplayer)
   implementation(libs.media3.ui)
   implementation(libs.media3.common)
